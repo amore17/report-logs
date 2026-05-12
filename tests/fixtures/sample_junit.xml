@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dns" tests="3" failures="3" errors="0" skipped="0" time="10.0">
+  <testcase classname="ipatests.test_dns" name="test_forwarders" time="1.0">
+    <failure message="timeout">Connection timed out</failure>
+  </testcase>
+  <testcase classname="ipatests.test_dns" name="test_forwarders" time="0.5">
+    <failure message="timeout">Connection timed out</failure>
+  </testcase>
+  <testcase classname="ipatests.test_trust" name="test_establish" time="2.0">
+    <failure message="ldap down">ldap://… refused</failure>
+  </testcase>
+</testsuite>
