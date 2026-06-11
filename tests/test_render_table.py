@@ -72,7 +72,7 @@ def test_render_failure_table_tier_prefers_pipeline_name():
     assert "| Nightly-Tier1 | s |" in out
 
 
-def test_iter_failure_table_rows_six_tuples():
+def test_iter_failure_table_rows_seven_tuples():
     r = ParseResult(
         tests=1,
         failures=1,
@@ -90,7 +90,7 @@ def test_iter_failure_table_rows_six_tuples():
     )
     rows = iter_failure_table_rows(r, tier="Nightly-T1")
     assert len(rows) == 1
-    assert rows[0] == ("Nightly-T1", "s", None, "C.t", "[failure] e", "")
+    assert rows[0] == ("Nightly-T1", "s", None, "C.t", "[failure] e", "", "")
 
 
 def test_iter_failure_table_rows_known_issue_em_dash_when_links_on(
@@ -114,7 +114,8 @@ def test_iter_failure_table_rows_known_issue_em_dash_when_links_on(
     )
     rows = iter_failure_table_rows(r, tier="T")
     assert len(rows) == 1
-    assert rows[0][-1] == "—"
+    assert rows[0][5] == "—"
+    assert rows[0][6] == ""
 
 
 def test_iter_failure_table_rows_includes_report_html_href():

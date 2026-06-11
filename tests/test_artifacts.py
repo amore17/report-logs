@@ -21,7 +21,11 @@ def test_is_all_tier_signoff() -> None:
     assert is_all_tier_signoff("All-Tier-Signoff")
     assert is_all_tier_signoff("all-tier-signoff")
     assert is_all_tier_signoff("All Tier Signoff")
+    assert is_all_tier_signoff("All-Tier-FIPS-Signoff")
+    assert is_all_tier_signoff("All-Tier-STIG-Signoff")
+    assert is_all_tier_signoff("all-tier-fips-signoff")
     assert not is_all_tier_signoff("Nightly-Tier1")
+    assert not is_all_tier_signoff("All-Tier1")
 
 
 def test_discover_signoff_pipeline_index_urls_all_tiers(monkeypatch: pytest.MonkeyPatch) -> None:

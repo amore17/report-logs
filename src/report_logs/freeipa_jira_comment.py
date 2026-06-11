@@ -53,6 +53,18 @@ def strip_optional_for_rhel(argv: list[str]) -> tuple[list[str], str | None]:
     return argv, None
 
 
+def strip_optional_short(argv: list[str]) -> tuple[list[str], bool]:
+    """Remove a standalone ``short`` token (anywhere in *argv*); enables labeled failure lines."""
+    out: list[str] = []
+    short = False
+    for arg in argv:
+        if arg.strip().lower() == "short":
+            short = True
+        else:
+            out.append(arg)
+    return out, short
+
+
 def load_env_file(path: Path, *, override: bool = False) -> None:
     """Parse shell-style KEY=value lines (optional quotes) into os.environ."""
     text = path.read_text(encoding="utf-8")
@@ -130,32 +142,49 @@ def adf_paragraph(*nodes: dict[str, Any]) -> dict[str, Any]:
     return {"type": "paragraph", "content": list(nodes)}
 
 
-def adf_known_issue_cell(text: str) -> dict[str, Any]:
-    """ADF paragraph for **AI Insights**: one or more markdown ``[KEY](url)`` become links (`` · `` between)."""
+def adf_bold_text(t: str) -> dict[str, Any]:
+    return {"type": "text", "text": t, "marks": [{"type": "strong"}]}
+
+
+def adf_known_issue_nodes(text: str) -> list[dict[str, Any]]:
     t = (text or "").strip()
     if not t:
-        return adf_paragraph(adf_text(""))
+        return [adf_text("")]
     empty = known_issue_empty_placeholder()
     if t == "—" or t == empty:
-        return adf_paragraph(adf_text(empty))
+        return [adf_text(empty)]
     matches = list(re.finditer(r"\[([^\]]+)\]\((https://[^)]+)\)", t))
     if not matches:
-        return adf_paragraph(adf_text(t))
+        return [adf_text(t)]
     nodes: list[dict[str, Any]] = []
     for i, m in enumerate(matches):
         if i > 0:
             nodes.append(adf_text(" · "))
         nodes.append(adf_text(m.group(1), href=m.group(2)))
-    return adf_paragraph(*nodes)
+    return nodes
+
+
+def adf_known_issue_cell(text: str) -> dict[str, Any]:
+    """ADF paragraph for **AI Insights**: one or more markdown ``[KEY](url)`` become links (`` · `` between)."""
+    return adf_paragraph(*adf_known_issue_nodes(text))
+
+
+def adf_suite_name_nodes(label: str, report_html_href: str | None) -> list[dict[str, Any]]:
+    t = (label or "").strip() or "—"
+    h = (report_html_href or "").strip()
+    if h.startswith(("http://", "https://")):
+        return [adf_text(t, href=h)]
+    return [adf_text(t)]
 
 
 def adf_suite_name_cell(label: str, report_html_href: str | None) -> dict[str, Any]:
     """ADF cell for **Suite Name**: link to job ``report.html`` when *report_html_href* is http(s)."""
-    t = (label or "").strip() or "—"
-    h = (report_html_href or "").strip()
-    if h.startswith(("http://", "https://")):
-        return adf_paragraph(adf_text(t, href=h))
-    return adf_paragraph(adf_text(t))
+    return adf_paragraph(*adf_suite_name_nodes(label, report_html_href))
+
+
+def adf_labeled_line(label: str, *value_nodes: dict[str, Any]) -> dict[str, Any]:
+    """One line: **Label:** value (label bold in ADF)."""
+    return adf_paragraph(adf_bold_text(f"{label}:"), adf_text(" "), *value_nodes)
 
 
 def adf_table_comment(
@@ -494,6 +523,18 @@ def merge_epic_in_progress_into_comment_doc(
         return doc
 
 
+def format_pass_fail_skip_cell(passed: int, failed: int, skipped: int, total: int) -> str:
+    """Summary table cell: counts plus pass/fail/skip percentages of *total*."""
+    if total <= 0:
+        return "0 / 0 / 0 (0)"
+    p_pct = passed / total * 100
+    f_pct = failed / total * 100
+    s_pct = skipped / total * 100
+    return (
+        f"{passed} ({p_pct:.1f}%) / {failed} ({f_pct:.1f}%) / {skipped} ({s_pct:.1f}%) ({total})"
+    )
+
+
 def build_table_rows_from_reports(
     reports: list[tuple[str, str]],
 ) -> list[tuple[str, str, str, str | None]]:
@@ -504,7 +545,7 @@ def build_table_rows_from_reports(
         folder = extract_title_folder(rep) or "—"
         if totals:
             p, f, s, tot = totals
-            results = f"{p} / {f} / {s} ({tot})"
+            results = format_pass_fail_skip_cell(p, f, s, tot)
         else:
             results = "—"
         pipe_href = None
@@ -536,7 +577,7 @@ def build_table_rows_from_parse_results(
         bad = result.failures + result.errors
         s = result.skipped
         tot = result.tests
-        results = f"{p} / {bad} / {s} ({tot})"
+        results = format_pass_fail_skip_cell(p, bad, s, tot)
         pipe_href = listing if listing and re.search(r"/tier-[123]/", listing) else None
         rows.append((tier, folder, results, pipe_href))
     return rows
@@ -545,17 +586,16 @@ def build_table_rows_from_parse_results(
 def adf_failure_detail_table(
     *,
     section_title: str,
-    row_tuples: list[tuple[str, str, str | None, str, str, str]],
+    row_tuples: list[tuple[str, str, str | None, str, str, str, str]],
 ) -> dict[str, Any]:
-    """ADF table: Tier, Suite Name (optional report.html link), Test Name, Failure Details, AI Insights."""
+    """ADF table: Tier, Suite Name, AI Insights, Blocked Reason."""
 
     def tr_header() -> dict[str, Any]:
         headers = (
             "Tier",
             "Suite Name",
-            "Test Name",
-            "Failure Details",
             AI_INSIGHTS_COLUMN_HEADER,
+            "Blocked Reason",
         )
         return {
             "type": "tableRow",
@@ -569,8 +609,8 @@ def adf_failure_detail_table(
             ],
         }
 
-    def tr_data(cells: tuple[str, str, str | None, str, str, str]) -> dict[str, Any]:
-        c0, c1, c1href, c2, c3, c4 = cells
+    def tr_data(cells: tuple[str, str, str | None, str, str, str, str]) -> dict[str, Any]:
+        c0, c1, c1href, _test_name, _detail, c4, c5 = cells
         return {
             "type": "tableRow",
             "content": [
@@ -587,17 +627,12 @@ def adf_failure_detail_table(
                 {
                     "type": "tableCell",
                     "attrs": {},
-                    "content": [adf_paragraph(adf_text(c2))],
-                },
-                {
-                    "type": "tableCell",
-                    "attrs": {},
-                    "content": [adf_paragraph(adf_text(c3))],
-                },
-                {
-                    "type": "tableCell",
-                    "attrs": {},
                     "content": [adf_known_issue_cell(c4)],
+                },
+                {
+                    "type": "tableCell",
+                    "attrs": {},
+                    "content": [adf_known_issue_cell(c5)],
                 },
             ],
         }
@@ -611,6 +646,62 @@ def adf_failure_detail_table(
         },
     ]
     return {"type": "doc", "version": 1, "content": content}
+
+
+def adf_failure_detail_lines(
+    *,
+    section_title: str,
+    row_tuples: list[tuple[str, str, str | None, str, str, str, str]],
+) -> dict[str, Any]:
+    """ADF section: each failure as labeled lines (Tier, Suite Name, Test Name, AI Insights, Blocked Reason)."""
+    content: list[dict[str, Any]] = [adf_paragraph(adf_text(section_title))]
+    for tier, suite, suite_href, test_name, _detail, insights, blocked in row_tuples:
+        content.append(adf_labeled_line("Tier", adf_text(tier)))
+        content.append(adf_labeled_line("Suite Name", *adf_suite_name_nodes(suite, suite_href)))
+        content.append(adf_labeled_line("Test Name", adf_text(test_name)))
+        content.append(
+            adf_labeled_line(AI_INSIGHTS_COLUMN_HEADER, *adf_known_issue_nodes(insights))
+        )
+        if (blocked or "").strip():
+            content.append(
+                adf_labeled_line("Blocked Reason", *adf_known_issue_nodes(blocked))
+            )
+        content.append(adf_paragraph(adf_text("")))
+    return {"type": "doc", "version": 1, "content": content}
+
+
+def failure_doc_inner_for_rows(
+    *,
+    section_title: str,
+    row_tuples: list[tuple[str, str, str | None, str, str, str, str]],
+    as_labeled_lines: bool,
+) -> list[dict[str, Any]]:
+    rows = row_tuples if as_labeled_lines else dedupe_failure_rows_by_tier_suite(row_tuples)
+    if as_labeled_lines:
+        return adf_failure_detail_lines(section_title=section_title, row_tuples=rows)[
+            "content"
+        ]
+    return adf_failure_detail_table(section_title=section_title, row_tuples=rows)[
+        "content"
+    ]
+
+
+def dedupe_failure_rows_by_tier_suite(
+    rows: list[tuple[str, str, str | None, str, str, str, str]],
+) -> list[tuple[str, str, str | None, str, str, str, str]]:
+    """
+    One row per (**Tier**, **Suite Name**) for the Jira failure table (Test name is omitted there).
+    Keeps the first occurrence; later failing tests in the same suite are skipped.
+    """
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, str, str | None, str, str, str, str]] = []
+    for tier, suite, suite_href, ident, detail, known, blocked in rows:
+        key = (tier, suite)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((tier, suite, suite_href, ident, detail, known, blocked))
+    return out
 
 
 def _merge_adf_docs(*docs: dict[str, Any]) -> dict[str, Any]:
@@ -630,9 +721,10 @@ def failure_rows_for_tiers(
     *,
     detail_limit: int,
     max_rows: int | None,
-) -> list[tuple[str, str, str | None, str, str, str]]:
+    dedupe_by_tier_suite: bool = False,
+) -> list[tuple[str, str, str | None, str, str, str, str]]:
     """Flatten per-tier failure rows for the detail table."""
-    out: list[tuple[str, str, str | None, str, str, str]] = []
+    out: list[tuple[str, str, str | None, str, str, str, str]] = []
     for tier, result, _note in items:
         if result is None:
             out.append(
@@ -645,6 +737,7 @@ def failure_rows_for_tiers(
                     known_issue_empty_placeholder()
                     if known_issue_jira_links_enabled()
                     else "",
+                    "",
                 )
             )
             continue
@@ -654,8 +747,10 @@ def failure_rows_for_tiers(
             detail_limit=detail_limit,
             known_issue_for=None,
         )
-        for tc, suite, suite_href, ident, detail, known in tier_rows:
-            out.append((tc, suite, suite_href, ident, detail, known))
+        for tc, suite, suite_href, ident, detail, known, blocked in tier_rows:
+            out.append((tc, suite, suite_href, ident, detail, known, blocked))
+    if dedupe_by_tier_suite:
+        out = dedupe_failure_rows_by_tier_suite(out)
     if max_rows is not None and len(out) > max_rows:
         out = out[:max_rows]
         out.append(
@@ -664,10 +759,11 @@ def failure_rows_for_tiers(
                 "—",
                 None,
                 "—",
-                f"(Table truncated to {max_rows} rows; raise FREEIPA_JIRA_FAILURE_TABLE_MAX_ROWS.)",
+                f"(Failure list truncated to {max_rows} entries; raise FREEIPA_JIRA_FAILURE_TABLE_MAX_ROWS.)",
                 known_issue_empty_placeholder()
                 if known_issue_jira_links_enabled()
                 else "",
+                "",
             )
         )
     return out
@@ -763,6 +859,91 @@ def _is_content_limit_exceeded(exc: BaseException) -> bool:
     return "CONTENT_LIMIT_EXCEEDED" in msg
 
 
+def _failure_doc_from_fetches(
+    fetches: list[tuple[str, ParseResult | None, str]],
+    *,
+    section_title: str,
+    as_labeled_lines: bool,
+    detail_limit: int,
+    max_rows: int | None,
+) -> dict[str, Any] | None:
+    """ADF doc with only the merged **Failing tests** section (all *fetches*)."""
+    failure_rows = failure_rows_for_tiers(
+        fetches,
+        detail_limit=detail_limit,
+        max_rows=max_rows,
+        dedupe_by_tier_suite=not as_labeled_lines,
+    )
+    if not failure_rows:
+        return None
+    inner = failure_doc_inner_for_rows(
+        section_title=section_title,
+        row_tuples=failure_rows,
+        as_labeled_lines=as_labeled_lines,
+    )
+    return {"type": "doc", "version": 1, "content": inner}
+
+
+def _post_merged_failure_doc_with_truncation(
+    *,
+    base: str,
+    email: str,
+    token: str,
+    issue_key: str,
+    fetches: list[tuple[str, ParseResult | None, str]],
+    failure_section_title: str,
+    failure_as_labeled_lines: bool,
+    detail_limit: int,
+    max_rows: int | None,
+    tier_count: int,
+) -> bool:
+    """
+    Post one merged failure table/lines doc for all tiers; shrink *max_rows* on
+    CONTENT_LIMIT_EXCEEDED until it fits or give up.
+    """
+    full_count = len(
+        failure_rows_for_tiers(
+            fetches,
+            detail_limit=detail_limit,
+            max_rows=None,
+            dedupe_by_tier_suite=not failure_as_labeled_lines,
+        )
+    )
+    if full_count == 0:
+        return False
+    row_cap = max_rows if max_rows is not None else full_count
+    while row_cap >= 1:
+        effective_cap = row_cap if row_cap < full_count else None
+        failure_doc = _failure_doc_from_fetches(
+            fetches,
+            section_title=failure_section_title,
+            as_labeled_lines=failure_as_labeled_lines,
+            detail_limit=detail_limit,
+            max_rows=effective_cap,
+        )
+        if failure_doc is None:
+            return False
+        try:
+            res = post_comment(base, email, token, issue_key, failure_doc)
+            suffix = f" (truncated to {row_cap} rows)" if effective_cap is not None else ""
+            print(
+                f"Posted comment (table-failures) id={res.get('id', '?')} on {issue_key}"
+                f" ({tier_count} tiers{suffix})"
+            )
+            return True
+        except RuntimeError as exc:
+            if not _is_content_limit_exceeded(exc):
+                raise
+            if row_cap <= 1:
+                print(
+                    "warning: merged failure table still too large for Jira; skipped.",
+                    file=sys.stderr,
+                )
+                return False
+            row_cap = max(1, row_cap // 2)
+    return False
+
+
 def _post_with_content_limit_fallback(
     *,
     base: str,
@@ -773,106 +954,86 @@ def _post_with_content_limit_fallback(
     label: str,
     rhel: str,
     tiers: list[str],
+    fetches: list[tuple[str, ParseResult | None, str]],
     intro: str,
     footer: str | None,
     style: str,
     mode: str,
     include_failure_table: bool,
     failure_section_title: str,
+    failure_as_labeled_lines: bool,
     detail_limit: int,
     max_rows: int | None,
     include_epic_in_progress: bool,
 ) -> int:
     """
-    Post *doc*; if Jira rejects with CONTENT_LIMIT_EXCEEDED and multiple tiers were requested,
-    post one comment per tier and add the umbrella epic child-issues section only once.
+    Post *doc*; on CONTENT_LIMIT_EXCEEDED with multiple tiers, split into two comments that
+    each keep **all** tiers: merged pass/fail summary table, then merged failure table.
     """
     try:
         result = post_comment(base, email, token, issue_key, doc)
         print(f"Posted comment ({label}) id={result.get('id', '?')} on {issue_key}")
         return 0
     except RuntimeError as exc:
-        if not (_is_content_limit_exceeded(exc) and len(tiers) > 1):
+        if not (_is_content_limit_exceeded(exc) and len(fetches) > 1):
             raise
 
     print(
-        "warning: Jira comment too large (CONTENT_LIMIT_EXCEEDED); falling back to one comment per tier.",
+        "warning: Jira comment too large (CONTENT_LIMIT_EXCEEDED); "
+        "posting merged summary and failure tables separately (all tiers in each).",
         file=sys.stderr,
     )
 
     epic_posted = False
+    merged_table_rows = build_table_rows_from_parse_results(fetches)
+    summary_doc = adf_table_comment(intro=intro, rows=merged_table_rows, footer=footer)
+    res = post_comment(base, email, token, issue_key, summary_doc)
+    print(
+        f"Posted comment (table-summary) id={res.get('id', '?')} on {issue_key}"
+        f" ({len(fetches)} tiers)"
+    )
 
-    for tier in tiers:
-        one_fetch = run_fetch_for_tiers(rhel, [tier])
-        one_table_rows = build_table_rows_from_parse_results(one_fetch)
-        one_reports = render_reports_text_from_fetches(rhel, one_fetch, style)
+    if include_failure_table:
+        _post_merged_failure_doc_with_truncation(
+            base=base,
+            email=email,
+            token=token,
+            issue_key=issue_key,
+            fetches=fetches,
+            failure_section_title=failure_section_title,
+            failure_as_labeled_lines=failure_as_labeled_lines,
+            detail_limit=detail_limit,
+            max_rows=max_rows,
+            tier_count=len(fetches),
+        )
 
+    if mode == "both":
+        reports = render_reports_text_from_fetches(rhel, fetches, style)
         parts = [
             "Generated by analyze_freeipa_ci_artifacts (%s).\n" % style,
             "",
-            "Scope: RHEL %s — tiers: %s\n" % (rhel, tier),
+            "Scope: RHEL %s — tiers: %s\n" % (rhel, ", ".join(tiers)),
             "",
         ]
-        for _t, rep in one_reports:
+        for tier, rep in reports:
             parts.append(f"### {tier}\n\n")
             parts.append(strip_per_job_fetch_lines(rep))
             parts.append("\n")
-        one_full_text = "".join(parts)
-
-        one_intro = intro
-        one_summary_doc = adf_table_comment(intro=one_intro, rows=one_table_rows, footer=footer)
-
-        one_failure_doc_inner: list[dict[str, Any]] | None = None
-        if include_failure_table:
-            one_failure_rows = failure_rows_for_tiers(
-                one_fetch,
-                detail_limit=detail_limit,
-                max_rows=max_rows,
-            )
-            one_failure_doc_inner = adf_failure_detail_table(
-                section_title=failure_section_title,
-                row_tuples=one_failure_rows,
-            )["content"]
-
-        one_summary_plus_failure: dict[str, Any] = one_summary_doc
-        if one_failure_doc_inner is not None:
-            one_summary_plus_failure = _merge_adf_docs(
-                one_summary_doc,
-                {"type": "doc", "version": 1, "content": one_failure_doc_inner},
-            )
-
-        if mode == "table":
-            one_doc = one_summary_plus_failure
-            one_label = "table"
-        elif mode == "full":
-            inner: list[dict[str, Any]] = [adf_paragraph(adf_text(one_intro))]
-            if one_failure_doc_inner is not None:
-                inner.extend(one_failure_doc_inner)
-            inner.extend(plain_chunked_code_blocks(one_full_text))
-            one_doc = {"type": "doc", "version": 1, "content": inner}
-            one_label = "full"
-        else:
-            one_doc = adf_with_plain_append(one_summary_plus_failure, one_full_text)
-            one_label = "both"
-
-        # Do not include the epic "In Progress" section in each tier comment.
-        # We'll add it once after per-tier comments are posted.
+        full_text = "".join(parts)
+        plain_doc: dict[str, Any] = {
+            "type": "doc",
+            "version": 1,
+            "content": plain_chunked_code_blocks(full_text),
+        }
         try:
-            res = post_comment(base, email, token, issue_key, one_doc)
-            print(
-                f"Posted comment ({one_label}) id={res.get('id', '?')} on {issue_key} ({tier})"
-            )
+            res = post_comment(base, email, token, issue_key, plain_doc)
+            print(f"Posted comment (full-text) id={res.get('id', '?')} on {issue_key}")
         except RuntimeError as exc:
-            if _is_content_limit_exceeded(exc) and include_failure_table:
-                # Last-resort shrink: drop the large per-failure detail table for this tier only.
-                smaller = one_summary_doc
-                try:
-                    res = post_comment(base, email, token, issue_key, smaller)
-                    print(
-                        f"Posted comment (table) id={res.get('id', '?')} on {issue_key} ({tier}; failure table disabled)"
-                    )
-                except RuntimeError:
-                    raise
+            if _is_content_limit_exceeded(exc):
+                print(
+                    "warning: full report plaintext too large for Jira; skipped.",
+                    file=sys.stderr,
+                )
             else:
                 raise
 
@@ -917,13 +1078,14 @@ def _post_with_content_limit_fallback(
 def main(argv: list[str] | None = None) -> int:
     raw = list(argv if argv is not None else sys.argv[1:])
     raw, rhel_from_for = strip_optional_for_rhel(raw)
+    raw, short_on_cli = strip_optional_short(raw)
     p = argparse.ArgumentParser(
         description=(
             "Post FreeIPA CI analyzer summary to Jira (ADF table + optional full short report). "
             "Optionally append non-Closed umbrella issues under epic REPORT_LOGS_IDM_5601_PARENT_KEY when FREEIPA_JIRA_EPIC_IN_PROGRESS_SECTION=1."
         ),
         usage=(
-            "post-freeipa-jira-comment [for RHEL] [--rhel VERSION] [--env-file PATH] "
+            "post-freeipa-jira-comment [for RHEL] [short] [--rhel VERSION] [--env-file PATH] "
             "--jira-issue-key KEY [--env-override] [--dry-run] TIER [TIER ...]"
         ),
     )
@@ -1000,10 +1162,12 @@ def main(argv: list[str] | None = None) -> int:
         print("error: FREEIPA_JIRA_POST_MODE must be table, full, or both.", file=sys.stderr)
         return 2
 
-    intro = os.environ.get(
-        "FREEIPA_JIRA_INTRO",
-        f"FreeIPA CI — merged pipeline JUnit (report-logs analyze_freeipa_ci_artifacts, {style}). RHEL {rhel}.",
-    ).strip()
+    default_intro = (
+        "FreeIPA CI — merged pipeline JUnit (report-logs analyze_freeipa_ci_artifacts, short)."
+        if short_on_cli
+        else f"FreeIPA CI — merged pipeline JUnit (report-logs analyze_freeipa_ci_artifacts, {style}). RHEL {rhel}."
+    )
+    intro = os.environ.get("FREEIPA_JIRA_INTRO", default_intro).strip()
 
     footer = os.environ.get("FREEIPA_JIRA_TABLE_FOOTER", "").strip() or None
 
@@ -1040,18 +1204,20 @@ def main(argv: list[str] | None = None) -> int:
     full_text = "".join(parts)
 
     summary_doc = adf_table_comment(intro=intro, rows=table_rows, footer=footer)
-    failure_rows: list[tuple[str, str, str | None, str, str, str]] = []
+    failure_rows: list[tuple[str, str, str | None, str, str, str, str]] = []
     failure_doc_inner: list[dict[str, Any]] | None = None
     if include_failure_table:
         failure_rows = failure_rows_for_tiers(
             fetches,
             detail_limit=detail_limit,
             max_rows=max_rows,
+            dedupe_by_tier_suite=not short_on_cli,
         )
-        failure_doc_inner = adf_failure_detail_table(
+        failure_doc_inner = failure_doc_inner_for_rows(
             section_title=failure_section_title,
             row_tuples=failure_rows,
-        )["content"]
+            as_labeled_lines=short_on_cli,
+        )
 
     summary_plus_failure: dict[str, Any] = summary_doc
     if failure_doc_inner is not None:
@@ -1060,7 +1226,7 @@ def main(argv: list[str] | None = None) -> int:
             {"type": "doc", "version": 1, "content": failure_doc_inner},
         )
 
-    if mode == "table":
+    if short_on_cli or mode == "table":
         doc = summary_plus_failure
         label = "table"
     elif mode == "full":
@@ -1095,12 +1261,14 @@ def main(argv: list[str] | None = None) -> int:
         label=label,
         rhel=rhel,
         tiers=fetch_tiers,
+        fetches=fetches,
         intro=intro,
         footer=footer,
         style=style,
         mode=mode,
         include_failure_table=include_failure_table,
         failure_section_title=failure_section_title,
+        failure_as_labeled_lines=short_on_cli,
         detail_limit=detail_limit,
         max_rows=max_rows,
         include_epic_in_progress=include_epic_in_progress,

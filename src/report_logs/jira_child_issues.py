@@ -256,6 +256,153 @@ def adf_to_plain(node: object) -> str:
     return ""
 
 
+_BROWSE_ISSUE_KEY_RE = re.compile(r"/browse/([A-Z][A-Z0-9]*-\d+)")
+_PAGURE_ISSUE_NUM_RE = re.compile(r"pagure\.io/freeipa/issue/(\d+)", re.I)
+_MARKDOWN_ISSUE_KEY_RE = re.compile(r"\[([^\]]+)\]\((https://[^)]+)\)")
+
+_BLOCKED_REASON_FIELD_DEFAULT = "customfield_10483"
+_blocked_reason_pairs_cache: dict[str, list[tuple[str, str]]] = {}
+
+
+def blocked_reason_field_id() -> str:
+    raw = os.environ.get("REPORT_LOGS_JIRA_BLOCKED_REASON_FIELD", _BLOCKED_REASON_FIELD_DEFAULT)
+    return (raw or _BLOCKED_REASON_FIELD_DEFAULT).strip()
+
+
+def blocked_reason_fetch_enabled() -> bool:
+    return os.environ.get("REPORT_LOGS_JIRA_BLOCKED_REASON", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+def parse_markdown_issue_keys(markdown: str) -> list[str]:
+    """Issue keys from markdown ``[KEY](url)`` links (e.g. AI Insights cell)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for key, _href in _MARKDOWN_ISSUE_KEY_RE.findall(markdown or ""):
+        k = key.strip()
+        if k and k not in seen:
+            seen.add(k)
+            out.append(k)
+    return out
+
+
+def short_label_from_url(url: str) -> str:
+    """Short display label for a tracker URL (issue key or ``pagure#NNNN``)."""
+    u = (url or "").strip()
+    if not u:
+        return ""
+    m = _BROWSE_ISSUE_KEY_RE.search(u)
+    if m:
+        return m.group(1)
+    m2 = _PAGURE_ISSUE_NUM_RE.search(u)
+    if m2:
+        return f"pagure#{m2.group(1)}"
+    return u.split("#")[0].rstrip("/").split("/")[-1] or u
+
+
+def adf_collect_short_link_pairs(node: object) -> list[tuple[str, str]]:
+    """
+    Extract ``(label, href)`` short links from Jira ADF (Blocked Reason field).
+
+    Handles ``inlineCard`` URLs and ``text`` nodes with link marks.
+    """
+    pairs: list[tuple[str, str]] = []
+    if node is None:
+        return pairs
+    if isinstance(node, dict):
+        ntype = node.get("type")
+        if ntype == "inlineCard":
+            url = ((node.get("attrs") or {}).get("url") or "").strip()
+            if url and url.lower() != "none":
+                href = url.split("#")[0]
+                label = short_label_from_url(url)
+                if label:
+                    pairs.append((label, href))
+        elif ntype == "text":
+            text = (node.get("text") or "").strip()
+            if text.lower() == "none":
+                return pairs
+            link_href = ""
+            for mark in node.get("marks") or []:
+                if isinstance(mark, dict) and mark.get("type") == "link":
+                    link_href = ((mark.get("attrs") or {}).get("href") or "").strip()
+                    break
+            if link_href:
+                href = link_href.split("#")[0]
+                label = short_label_from_url(link_href) or short_label_from_url(text) or text
+                pairs.append((label, href))
+            elif text.startswith(("http://", "https://")):
+                href = text.split("#")[0]
+                pairs.append((short_label_from_url(text), href))
+        for child in node.get("content") or []:
+            pairs.extend(adf_collect_short_link_pairs(child))
+    elif isinstance(node, list):
+        for child in node:
+            pairs.extend(adf_collect_short_link_pairs(child))
+    return pairs
+
+
+def blocked_reason_link_pairs_for_issue(issue_key: str) -> list[tuple[str, str]]:
+    """Short links from the issue's **Blocked Reason** field (cached per key)."""
+    key = (issue_key or "").strip()
+    if not key or not blocked_reason_fetch_enabled():
+        return []
+    if key in _blocked_reason_pairs_cache:
+        return list(_blocked_reason_pairs_cache[key])
+
+    cred = jira_rest_credentials()
+    if cred is None:
+        _blocked_reason_pairs_cache[key] = []
+        return []
+
+    base, email, token = cred
+    fid = blocked_reason_field_id()
+    url = (
+        f"{base}/rest/api/3/issue/{urllib.parse.quote(key, safe='')}"
+        f"?fields={urllib.parse.quote(fid, safe='')}"
+    )
+    res = _http_json("GET", url, email=email, token=token)
+    pairs: list[tuple[str, str]] = []
+    if res and isinstance(res.get("fields"), dict):
+        raw = res["fields"].get(fid)
+        if isinstance(raw, dict):
+            pairs = adf_collect_short_link_pairs(raw)
+        elif isinstance(raw, str) and raw.strip().lower() not in ("", "none"):
+            if raw.strip().startswith(("http://", "https://")):
+                href = raw.strip().split("#")[0]
+                pairs = [(short_label_from_url(href), href)]
+
+    deduped: list[tuple[str, str]] = []
+    seen_href: set[str] = set()
+    for label, href in pairs:
+        if href and href not in seen_href:
+            seen_href.add(href)
+            deduped.append((label, href))
+    _blocked_reason_pairs_cache[key] = deduped
+    return list(deduped)
+
+
+def blocked_reason_markdown_for_issue_keys(issue_keys: list[str]) -> str:
+    """Markdown short links from **Blocked Reason** on each issue key (`` · `` joined)."""
+    pairs: list[tuple[str, str]] = []
+    seen_href: set[str] = set()
+    for key in issue_keys:
+        for label, href in blocked_reason_link_pairs_for_issue(key):
+            if href not in seen_href:
+                seen_href.add(href)
+                pairs.append((label, href))
+    return " · ".join(f"[{label}]({href})" for label, href in pairs)
+
+
+def blocked_reason_markdown_for_insights(insights_md: str) -> str:
+    """Resolve **Blocked Reason** short links for issues linked in an AI Insights cell."""
+    return blocked_reason_markdown_for_issue_keys(parse_markdown_issue_keys(insights_md))
+
+
 def _summary_from_fields(fields: dict[str, Any] | None) -> str:
     if not fields:
         return ""

@@ -12,6 +12,51 @@ from report_logs.jira_child_issues import (
 )
 
 
+def test_adf_collect_short_link_pairs_inline_card_and_link_mark() -> None:
+    adf_inline = {
+        "type": "doc",
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {
+                        "type": "inlineCard",
+                        "attrs": {"url": "https://redhat.atlassian.net/browse/RHEL-4898"},
+                    }
+                ],
+            }
+        ],
+    }
+    adf_link = {
+        "type": "paragraph",
+        "content": [
+            {
+                "type": "text",
+                "text": "https://redhat.atlassian.net/browse/IDM-1698",
+                "marks": [{"type": "link", "attrs": {"href": "https://redhat.atlassian.net/browse/IDM-1698"}}],
+            }
+        ],
+    }
+    assert jci.adf_collect_short_link_pairs(adf_inline) == [
+        ("RHEL-4898", "https://redhat.atlassian.net/browse/RHEL-4898")
+    ]
+    assert jci.adf_collect_short_link_pairs(adf_link) == [
+        ("IDM-1698", "https://redhat.atlassian.net/browse/IDM-1698")
+    ]
+
+
+def test_blocked_reason_markdown_for_insights(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_pairs(key: str) -> list[tuple[str, str]]:
+        if key == "IDM-6832":
+            return [("RHEL-4898", "https://redhat.atlassian.net/browse/RHEL-4898")]
+        return []
+
+    monkeypatch.setattr(jci, "blocked_reason_link_pairs_for_issue", fake_pairs)
+    insights = "[IDM-6832](https://redhat.atlassian.net/browse/IDM-6832)"
+    out = jci.blocked_reason_markdown_for_insights(insights)
+    assert out == "[RHEL-4898](https://redhat.atlassian.net/browse/RHEL-4898)"
+
+
 def test_failure_matches_upstream_suite_in_child_summary() -> None:
     blobs = [
         "upstream-edns fails on rhel 9.8 — track dnsconfd install",

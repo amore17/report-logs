@@ -123,13 +123,16 @@ DATE_RUN_FOLDER_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}$")
 
 SIGNOFF_PIPELINE_SEGMENTS: tuple[str, ...] = ("tier-1", "tier-2", "tier-3")
 
+# ``All-Tier-Signoff``, ``All-Tier-FIPS-Signoff``, ``All-Tier-STIG-Signoff``, etc.
+_ALL_TIER_SIGNOFF_RE = re.compile(r"^all-tier(?:-[a-z0-9]+)?-signoff$")
+
 
 def is_all_tier_signoff(tier: str) -> bool:
     """True for umbrella signoff folders that publish ``tier-1/``, ``tier-2/``, ``tier-3/`` under one run."""
     t = tier.strip().lower().replace("_", "-").replace(" ", "-")
     while "--" in t:
         t = t.replace("--", "-")
-    return t == "all-tier-signoff" or "all-tier-signoff" in t
+    return bool(_ALL_TIER_SIGNOFF_RE.match(t))
 
 
 def discover_signoff_pipeline_index_urls(
@@ -186,7 +189,7 @@ def discover_signoff_pipeline_index_urls(
                 return entries, run_diag
             notes.extend(seg_notes)
     tail = "\n".join(notes[-25:]) if notes else "(no candidate bases)"
-    return [], f"Could not discover All-Tier-Signoff pipelines for tier {tier!r}:\n{tail}"
+    return [], f"Could not discover All-Tier signoff pipelines for tier {tier!r}:\n{tail}"
 
 
 def pipeline_tier_segment(tier: str) -> str:

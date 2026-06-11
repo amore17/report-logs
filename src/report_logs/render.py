@@ -191,6 +191,19 @@ def _known_issue_fallback_placeholder(*, explicit_resolver: bool) -> str:
     return ""
 
 
+def _blocked_reason_cell(insights_md: str) -> str:
+    """Blocked Reason short links from AI Insights issue keys (Jira custom field)."""
+    if not known_issue_jira_links_enabled():
+        return ""
+    empty = known_issue_empty_placeholder()
+    known = (insights_md or "").strip()
+    if not known or known in (empty, "—"):
+        return ""
+    from report_logs.jira_child_issues import blocked_reason_markdown_for_insights
+
+    return blocked_reason_markdown_for_insights(known)
+
+
 def iter_failure_table_rows(
     result: ParseResult,
     *,
@@ -198,11 +211,11 @@ def iter_failure_table_rows(
     run_label: str | None = None,
     detail_limit: int = 1200,
     known_issue_for: Callable[[TestFailure], str] | None = None,
-) -> list[tuple[str, str, str | None, str, str, str]]:
+) -> list[tuple[str, str, str | None, str, str, str, str]]:
     """
     Row tuples: **Tier**, **Suite name** (plain text), optional **report.html** URL for that
-    suite/job, **Test name**, **Failure Details**, **AI Insights** (same semantics as
-    :func:`render_failure_table`).
+    suite/job, **Test name**, **Failure Details**, **AI Insights**, **Blocked Reason** (same
+    semantics as :func:`render_failure_table`).
     """
     bad = result.failures + result.errors
     ki_fn = known_issue_for or _known_issue_cell
@@ -214,9 +227,9 @@ def iter_failure_table_rows(
             msg = "No failing tests in this result."
         else:
             msg = "Failures were counted but no per-test detail was captured in JUnit."
-        return [(tc_base, "—", None, "—", msg, _known_issue_fallback_placeholder(explicit_resolver=explicit_resolver))]
+        return [(tc_base, "—", None, "—", msg, _known_issue_fallback_placeholder(explicit_resolver=explicit_resolver), "")]
 
-    rows: list[tuple[str, str, str | None, str, str, str]] = []
+    rows: list[tuple[str, str, str | None, str, str, str, str]] = []
     for f in result.failures_detail:
         suite = (f.suite_name or "").strip() or "—"
         href = _http_url_for_suite_link(f.report_html_url)
@@ -230,7 +243,8 @@ def iter_failure_table_rows(
         known = (ki_fn(f) or "").strip()
         if not known:
             known = _known_issue_fallback_placeholder(explicit_resolver=explicit_resolver)
-        rows.append((tc_base, suite, href, ident, one, known))
+        blocked = _blocked_reason_cell(known)
+        rows.append((tc_base, suite, href, ident, one, known, blocked))
     return rows
 
 
@@ -271,7 +285,7 @@ def render_failure_table(
         "|------|------------|-----------|-----------------|-------------|"
     )
 
-    for tc, suite, suite_href, ident, detail, known in iter_failure_table_rows(
+    for tc, suite, suite_href, ident, detail, known, blocked in iter_failure_table_rows(
         result,
         tier=tier,
         run_label=run_label,

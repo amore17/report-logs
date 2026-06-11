@@ -120,10 +120,17 @@ If **`REPORT_LOGS_KNOWN_ISSUE_LINKS`** is **unset**, **`post-freeipa-jira-commen
 | `REPORT_LOGS_KNOWN_ISSUE_LIST_MAX` | `25` | Max issue keys in an **AI Insights** cell when **`REPORT_LOGS_KNOWN_ISSUE_LINKS=1`** (capped at **100**) |
 | `REPORT_LOGS_KNOWN_ISSUE_EMPTY` | `—` | When **`REPORT_LOGS_KNOWN_ISSUE_LINKS=1`**, text when **no** Jira child matches (historically ``error`` looked like JUnit `[error]`) |
 
-**Command line:** required **`--jira-issue-key KEY`** (e.g. `IDM-5885`) for the issue to comment on; values in **`JIRA_ISSUE_KEY`** / **`JIRA_ISSUE`** from the environment or **`--env-file`** are **not** used for that. Also pass one or more **tier** names (as on idm-artifacts, e.g. `Nightly-Tier1`, `Nightly-Tier2`, or **`All-Tier-Signoff`**). RHEL: optional leading **`for RHEL9.8`** / **`for 9.8`**, and/or **`--rhel 9.8`** (overrides the `for` token). The tool finds the **newest** dated run under `…/<Tier>/RHELx.y/…/tier-N/` and merges JUnit from that pipeline. **`All-Tier-Signoff`** expands to **tier-1**, **tier-2**, and **tier-3** under the same dated run (one summary row per tier segment).
+**Command line:** required **`--jira-issue-key KEY`** (e.g. `IDM-5885`) for the issue to comment on; values in **`JIRA_ISSUE_KEY`** / **`JIRA_ISSUE`** from the environment or **`--env-file`** are **not** used for that. Also pass one or more **tier** names (as on idm-artifacts, e.g. `Nightly-Tier1`, `Nightly-Tier2`, `Nightly-Tier3`, or **`All-Tier-Signoff`** / **`All-Tier-FIPS-Signoff`** / **`All-Tier-STIG-Signoff`**). With **multiple** tier labels, the comment uses **one** pass/fail summary table (**FreeIPA CI — merged pipeline JUnit…**) with **one row per tier**, and **one** **Failing tests (per JUnit)** section listing failures from **all** tiers (each row includes a **Tier** column; **one row per tier + suite**, not per failing test). If Jira rejects the combined comment as too large, the tool posts the same merged summary table and merged failure table as **separate** comments (still all tiers in each), truncating failure rows only if needed. Optional **`short`** token anywhere on the command line: same merged summary table; failures are labeled lines (**Tier**, **Suite Name**, **Test Name**, **AI Insights**, **Blocked Reason** when present) with **one block per failing test**. RHEL: optional leading **`for RHEL9.8`** / **`for 9.8`**, and/or **`--rhel 9.8`** (overrides the `for` token). The tool finds the **newest** dated run under `…/<Tier>/RHELx.y/…/tier-N/` and merges JUnit from that pipeline. **All-Tier-*-Signoff** labels expand to **tier-1**, **tier-2**, and **tier-3** under the same dated run (one summary row per tier segment).
 
 ```bash
 source .venv/bin/activate
+post-freeipa-jira-comment for RHEL9.8 short --env-file ~/.config/wtmcp/env.d/jira.env \
+  --jira-issue-key IDM-5885 Nightly-Tier1 Nightly-Tier2
+```
+
+Default (failures in table):
+
+```bash
 post-freeipa-jira-comment for RHEL9.8 --env-file ~/.config/wtmcp/env.d/jira.env \
   --jira-issue-key IDM-5885 Nightly-Tier1 Nightly-Tier2
 ```
