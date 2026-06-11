@@ -152,7 +152,7 @@ def analyze_freeipa_ci_artifacts(
       Cap: env ``REPORT_LOGS_PIPELINE_MAX_JOBS`` (default 200; ``REPORT_LOGS_TIER1_MAX_JOBS`` is still read as a legacy alias).
     - **junit_relative_path**: reserved (ignored); default path guessing is disabled.
     - **report_style**: ``brief``, ``short``, or ``table`` (markdown table: Tier, Suite name,
-      Test name, Failure Details, AI Suggested Known Issue).
+      Test name, Failure Details, AI Insights).
     - **failure_table_include_run_label**: when ``report_style`` is ``table``, use **title**
       as a fallback for the **Tier** column only if **tier** would otherwise be empty (see ``failure_report``).
     """
@@ -206,7 +206,7 @@ def failure_report(
 
     - **brief**: headline, optional axis line, top failure clusters.
     - **short**: markdown with optional artifact link and grouped failures.
-    - **table**: markdown table (Tier, Suite name, Test name, Failure Details, AI Suggested Known Issue).
+    - **table**: markdown table (Tier, Suite name, Test name, Failure Details, AI Insights).
     - **tier**: optional pipeline tier label for the **Tier** column (e.g. ``Nightly-Tier1``).
     - **failure_table_include_run_label**: with **table**, if **tier** is omitted, use **title** as the Tier column.
     """

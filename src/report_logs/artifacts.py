@@ -121,6 +121,73 @@ def candidate_directory_urls(rhel_version: str, tier: str) -> list[str]:
 
 DATE_RUN_FOLDER_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}$")
 
+SIGNOFF_PIPELINE_SEGMENTS: tuple[str, ...] = ("tier-1", "tier-2", "tier-3")
+
+
+def is_all_tier_signoff(tier: str) -> bool:
+    """True for umbrella signoff folders that publish ``tier-1/``, ``tier-2/``, ``tier-3/`` under one run."""
+    t = tier.strip().lower().replace("_", "-").replace(" ", "-")
+    while "--" in t:
+        t = t.replace("--", "-")
+    return t == "all-tier-signoff" or "all-tier-signoff" in t
+
+
+def discover_signoff_pipeline_index_urls(
+    rhel_version: str,
+    tier: str,
+    *,
+    timeout: float = 60.0,
+) -> tuple[list[tuple[str, str, str]], str]:
+    """
+    For **All-Tier-Signoff** (and similar): newest dated run with any ``tier-N/`` index,
+    then every ``tier-1/``, ``tier-2/``, ``tier-3/`` present under that run.
+
+    Returns ``([(display_label, pipeline_index_url, note), ...], run_diagnostics)``.
+    """
+    tier_label = tier.strip()
+    bases = candidate_directory_urls(rhel_version, tier)
+    notes: list[str] = []
+    for root in bases:
+        root_u = root.rstrip("/") + "/"
+        status, html = fetch_url_optional(root_u, timeout=timeout)
+        if status is None:
+            notes.append(f"{root_u}: {html}")
+            continue
+        if status >= 400:
+            notes.append(f"{root_u}: HTTP {status}")
+            continue
+        folders = parse_nginx_date_run_folders(html)
+        if not folders:
+            notes.append(f"{root_u}: no dated run folders")
+            continue
+        for folder in sorted(folders, reverse=True):
+            run_root = urljoin(root_u, f"{folder}/").rstrip("/") + "/"
+            entries: list[tuple[str, str, str]] = []
+            seg_notes: list[str] = []
+            for seg in SIGNOFF_PIPELINE_SEGMENTS:
+                pipeline_u = urljoin(run_root, f"{seg}/")
+                st2, body = fetch_url_optional(pipeline_u, timeout=timeout)
+                if st2 == 200 and body and "<a href=" in body:
+                    ok = pipeline_u.rstrip("/") + "/"
+                    label = f"{tier_label} ({seg})"
+                    entries.append(
+                        (
+                            label,
+                            ok,
+                            f"Discovered pipeline index {ok} (run `{folder}`, `{seg}/`).",
+                        )
+                    )
+                elif st2 is None:
+                    seg_notes.append(f"{pipeline_u}: {body}")
+                else:
+                    seg_notes.append(f"{pipeline_u}: unusable (HTTP {st2})")
+            if entries:
+                run_diag = f"Discovered run folder `{folder}` under {root_u}."
+                return entries, run_diag
+            notes.extend(seg_notes)
+    tail = "\n".join(notes[-25:]) if notes else "(no candidate bases)"
+    return [], f"Could not discover All-Tier-Signoff pipelines for tier {tier!r}:\n{tail}"
+
 
 def pipeline_tier_segment(tier: str) -> str:
     """Return URL path segment ``tier-1``, ``tier-2``, or ``tier-3`` for a CI tier label."""

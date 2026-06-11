@@ -23,7 +23,7 @@ def test_render_failure_table_five_columns_no_tier():
         ],
     )
     out = render_failure_table(r, header="## H")
-    assert "| Tier | Suite name | Test name | Failure Details | AI Suggested Known Issue |" in out
+    assert "| Tier | Suite name | Test name | Failure Details | AI Insights |" in out
     assert "| — | upstream-dns |" in out
     assert "ipa.test_dns.TestFoo.test_bar" in out
     assert "[failure]" in out
@@ -47,7 +47,7 @@ def test_render_failure_table_with_run_label_fallback_tier():
         ],
     )
     out = render_failure_table(r, run_label="Tier1 9.8")
-    assert "| Tier | Suite name | Test name | Failure Details | AI Suggested Known Issue |" in out
+    assert "| Tier | Suite name | Test name | Failure Details | AI Insights |" in out
     assert "| Tier1 9.8 | j |" in out
     assert "[error]" in out
 

@@ -6,6 +6,8 @@ from collections.abc import Callable
 
 from report_logs.models import ParseResult, TestFailure
 
+AI_INSIGHTS_COLUMN_HEADER = "AI Insights"
+
 
 def _cluster_key(f) -> str:
     base = f"{f.classname}.{f.name}".strip(".")
@@ -149,7 +151,7 @@ def _tier_cell_value(tier: str | None, run_label: str | None) -> str:
 
 
 def known_issue_empty_placeholder() -> str:
-    """Text for the **AI Suggested Known Issue** column when no tracker match (env ``REPORT_LOGS_KNOWN_ISSUE_EMPTY``, default em dash)."""
+    """Text for the **AI Insights** column when no tracker match (env ``REPORT_LOGS_KNOWN_ISSUE_EMPTY``, default em dash)."""
     raw = os.environ.get("REPORT_LOGS_KNOWN_ISSUE_EMPTY", "—")
     if raw is None:
         return "—"
@@ -159,7 +161,7 @@ def known_issue_empty_placeholder() -> str:
 
 def known_issue_jira_links_enabled() -> bool:
     """
-    When true, the **AI Suggested Known Issue** column is filled via Jira (IDM-5601 umbrella, JQL, child text).
+    When true, the **AI Insights** column is filled via Jira (IDM-5601 umbrella, JQL, child text).
 
     Default **false** — the column is still present but cells stay **empty** (no Jira calls, no
     em dash). Set ``REPORT_LOGS_KNOWN_ISSUE_LINKS=1`` to enable linking and placeholder text
@@ -174,7 +176,7 @@ def known_issue_jira_links_enabled() -> bool:
 
 
 def _known_issue_cell(f: TestFailure) -> str:
-    """AI Suggested Known Issue column: optional Jira IDM-5601 children when :func:`known_issue_jira_links_enabled`."""
+    """AI Insights column: optional Jira IDM-5601 children when :func:`known_issue_jira_links_enabled`."""
     if not known_issue_jira_links_enabled():
         return ""
     from report_logs.known_issues import known_issue_markdown_idm_5601
@@ -199,7 +201,7 @@ def iter_failure_table_rows(
 ) -> list[tuple[str, str, str | None, str, str, str]]:
     """
     Row tuples: **Tier**, **Suite name** (plain text), optional **report.html** URL for that
-    suite/job, **Test name**, **Failure Details**, **AI Suggested Known Issue** (same semantics as
+    suite/job, **Test name**, **Failure Details**, **AI Insights** (same semantics as
     :func:`render_failure_table`).
     """
     bad = result.failures + result.errors
@@ -243,7 +245,7 @@ def render_failure_table(
     known_issue_for: Callable[[TestFailure], str] | None = None,
 ) -> str:
     """
-    Markdown table columns: **Tier**, **Suite name**, **Test name**, **Failure Details**, **AI Suggested Known Issue**.
+    Markdown table columns: **Tier**, **Suite name**, **Test name**, **Failure Details**, **AI Insights**.
 
     When failures were parsed from pipeline JUnit URLs (``…/job/1/junit.xml``), **Suite name**
     is a markdown link to ``…/job/1/report.html`` for that job.
@@ -263,10 +265,10 @@ def render_failure_table(
     parts.append("")
 
     parts.append(
-        "| Tier | Suite name | Test name | Failure Details | AI Suggested Known Issue |"
+        f"| Tier | Suite name | Test name | Failure Details | {AI_INSIGHTS_COLUMN_HEADER} |"
     )
     parts.append(
-        "|------|------------|-----------|-----------------|--------------------------|"
+        "|------|------------|-----------|-----------------|-------------|"
     )
 
     for tc, suite, suite_href, ident, detail, known in iter_failure_table_rows(

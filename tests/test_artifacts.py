@@ -5,14 +5,47 @@ from report_logs.models import ParseResult
 from report_logs.artifacts import (
     candidate_directory_urls,
     discover_pipeline_junit_xml_urls,
+    discover_signoff_pipeline_index_urls,
     fetch_and_merge_junit_urls,
     guess_junit_urls_for_run,
+    is_all_tier_signoff,
     junit_xml_relative_path_for_job_dir,
     normalize_rhel_version,
     normalize_tier_slug,
     parse_nginx_numeric_subdirectory_indices,
     rhel_path_variants,
 )
+
+
+def test_is_all_tier_signoff() -> None:
+    assert is_all_tier_signoff("All-Tier-Signoff")
+    assert is_all_tier_signoff("all-tier-signoff")
+    assert is_all_tier_signoff("All Tier Signoff")
+    assert not is_all_tier_signoff("Nightly-Tier1")
+
+
+def test_discover_signoff_pipeline_index_urls_all_tiers(monkeypatch: pytest.MonkeyPatch) -> None:
+    root = "https://artifacts.example/idm-ci/freeipa/All-Tier-Signoff/RHEL9.9/"
+    run_html = '<a href="2026-06-10_12-00/">2026-06-10_12-00/</a>'
+    tier_html = '<a href="upstream/">upstream/</a>'
+
+    def fake_fetch(url: str, **kwargs):
+        u = url.rstrip("/")
+        if u.endswith("All-Tier-Signoff/RHEL9.9"):
+            return (200, run_html)
+        if u.endswith("2026-06-10_12-00/tier-1") or u.endswith("2026-06-10_12-00/tier-2"):
+            return (200, tier_html)
+        if u.endswith("2026-06-10_12-00/tier-3"):
+            return (404, "")
+        raise AssertionError(f"unexpected fetch URL {url!r}")
+
+    monkeypatch.setattr("report_logs.artifacts.fetch_url_optional", fake_fetch)
+    entries, diag = discover_signoff_pipeline_index_urls("9.9", "All-Tier-Signoff")
+    assert "2026-06-10_12-00" in diag
+    assert len(entries) == 2
+    assert entries[0][0] == "All-Tier-Signoff (tier-1)"
+    assert entries[0][1].endswith("/2026-06-10_12-00/tier-1/")
+    assert entries[1][0] == "All-Tier-Signoff (tier-2)"
 
 
 def test_normalize_tier():
@@ -201,7 +234,7 @@ def test_analyze_freeipa_table_style(monkeypatch):
         junit_xml_urls=["https://example/junit.xml"],
         report_style="table",
     )
-    assert "| Tier | Suite name | Test name | Failure Details | AI Suggested Known Issue |" in out
+    assert "| Tier | Suite name | Test name | Failure Details | AI Insights |" in out
     assert "| Nightly-Tier1 |" in out
     assert "merged" in out
     assert "[failure]" in out

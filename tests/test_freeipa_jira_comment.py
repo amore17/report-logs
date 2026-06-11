@@ -40,6 +40,46 @@ def test_main_requires_jira_issue_key(
     assert exc_info.value.code == 2
 
 
+def test_run_fetch_for_all_tier_signoff_expands_tiers(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_signoff(_rhel: str, tier: str) -> tuple[list[tuple[str, str, str]], str]:
+        assert tier == "All-Tier-Signoff"
+        return (
+            [
+                ("All-Tier-Signoff (tier-1)", "https://example.test/run/tier-1/", "t1"),
+                ("All-Tier-Signoff (tier-2)", "https://example.test/run/tier-2/", "t2"),
+            ],
+            "run ok",
+        )
+
+    def fake_fetch(
+        rhel_version: str,
+        tier: str,
+        *,
+        junit_relative_path: str | None = None,
+        junit_xml_url: str | None = None,
+        junit_xml_urls: list[str] | None = None,
+        pipeline_index_url: str | None = None,
+    ):
+        n = 1 if "tier-1" in (pipeline_index_url or "") else 2
+        return ParseResult(
+            tests=n,
+            failures=0,
+            errors=0,
+            skipped=0,
+            failures_detail=[],
+        ), f"merged-{n}"
+
+    monkeypatch.setattr(fjc, "discover_signoff_pipeline_index_urls", fake_signoff)
+    monkeypatch.setattr(fjc, "fetch_freeipa_ci_parse_result", fake_fetch)
+
+    out = fjc.run_fetch_for_tiers("9.9", ["All-Tier-Signoff"])
+    assert len(out) == 2
+    assert out[0][0] == "All-Tier-Signoff (tier-1)"
+    assert out[1][0] == "All-Tier-Signoff (tier-2)"
+    assert out[0][1] is not None and out[0][1].tests == 1
+    assert out[1][1] is not None and out[1][1].tests == 2
+
+
 def test_run_fetch_for_tiers_uses_discover(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_disc(_rhel: str, _tier: str) -> tuple[str, str]:
         return "https://example.test/run/tier-1/", "discovered"

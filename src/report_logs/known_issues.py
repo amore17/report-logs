@@ -1,4 +1,4 @@
-"""Map failing tests to tracker links for the **AI Suggested Known Issue** table column."""
+"""Map failing tests to tracker links for the **AI Insights** table column."""
 
 from __future__ import annotations
 
